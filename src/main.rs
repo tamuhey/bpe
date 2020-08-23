@@ -1,4 +1,8 @@
-use std::collections::HashMap;
+use clap::Clap;
+use std::{
+    collections::HashMap,
+    io::{self, Read},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Copy)]
 enum Data {
@@ -6,6 +10,10 @@ enum Data {
     Pair((u32, u32)),
 }
 use Data::*;
+
+enum EncodeOpt {
+    NTimes(u32),
+}
 
 #[derive(Debug, Default, Clone)]
 struct Vocab {
@@ -44,25 +52,29 @@ impl Vocab {
         }
     }
 
-    pub fn encode(&mut self, text: &str) -> Vec<u32> {
-        let n = 10;
-
+    pub fn encode(&mut self, text: &str, opt: EncodeOpt) -> Vec<u32> {
+        let n = match opt {
+            EncodeOpt::NTimes(n) => n,
+        };
         let mut dat = self.encode_first_step(text);
-
         let mut counter = HashMap::new();
         let mut new_dat = vec![];
         for _ in 0..n {
-            self.encode_step(&mut dat, &mut new_dat, &mut counter)
+            if !self.encode_step(&mut dat, &mut new_dat, &mut counter) {
+                break;
+            }
         }
         dat
     }
 
+    /// Encode `dat` for one step
+    /// Returns whether the step proceeded or not.
     fn encode_step<'a>(
         &mut self,
         dat: &'a mut Vec<u32>,
         new_dat: &'a mut Vec<u32>,
         counter: &mut HashMap<Data, u32>,
-    ) {
+    ) -> bool {
         new_dat.clear();
         counter.clear();
 
@@ -71,11 +83,11 @@ impl Vocab {
             let c = Pair((s, t));
             *counter.entry(c).or_insert(0) += 1;
         }
-        let best: Data = *counter
-            .iter()
-            .max_by_key(|(_, v)| **v)
-            .map(|(k, _)| k)
-            .unwrap();
+        let best: Data = if let Some(v) = counter.iter().max_by_key(|(_, v)| **v).map(|(k, _)| k) {
+            *v
+        } else {
+            return false;
+        };
 
         // Encode the pair
         let code = self.push(best);
@@ -91,6 +103,7 @@ impl Vocab {
         }
 
         std::mem::swap(dat, new_dat);
+        true
     }
 
     /// Convert chars to code
@@ -104,10 +117,19 @@ impl Vocab {
     }
 }
 
+#[derive(Clap)]
+struct Opts {
+    #[clap(short, long)]
+    ntimes: u32,
+}
+
 fn main() {
-    let text = "Hello, world!";
+    let opts: Opts = Opts::parse();
+    let mut text = String::new();
+    io::stdin().lock().read_to_string(&mut text).unwrap();
+    println!("{:?}", text); // DEBUG
     let mut vocab = Vocab::default();
-    let dat = vocab.encode(text);
+    let dat = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
     println!("{:?}", dat);
     let mut s = String::new();
     vocab.decode(&dat, &mut s);
