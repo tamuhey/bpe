@@ -43,50 +43,73 @@ impl Vocab {
             }
         }
     }
-}
 
-fn main() {
-    let _text = "Hello, world!";
-    let mut vocab = Vocab::default();
-    let mut text: Vec<u32> = vec![];
-    for c in _text.chars() {
-        let c = Prime(c);
-        text.push(vocab.push(c));
+    pub fn encode(&mut self, text: &str) -> Vec<u32> {
+        let n = 10;
+
+        let mut dat = self.encode_first_step(text);
+
+        let mut counter = HashMap::new();
+        let mut new_dat = vec![];
+        for _ in 0..n {
+            self.encode_step(&mut dat, &mut new_dat, &mut counter)
+        }
+        dat
     }
 
-    let n = 10;
-    let mut counter = HashMap::new();
-    let mut new_text = vec![];
-    for _ in 0..n {
-        for (&s, &t) in text.iter().zip(text.iter().skip(1)) {
+    fn encode_step<'a>(
+        &mut self,
+        dat: &'a mut Vec<u32>,
+        new_dat: &'a mut Vec<u32>,
+        counter: &mut HashMap<Data, u32>,
+    ) {
+        new_dat.clear();
+        counter.clear();
+
+        // Find most frequently occuring pair
+        for (&s, &t) in dat.iter().zip(dat.iter().skip(1)) {
             let c = Pair((s, t));
-            *counter.entry(c).or_insert(0usize) += 1;
+            *counter.entry(c).or_insert(0) += 1;
         }
-        let best = *counter
+        let best: Data = *counter
             .iter()
             .max_by_key(|(_, v)| **v)
             .map(|(k, _)| k)
             .unwrap();
-        let besti = vocab.push(best);
+
+        // Encode the pair
+        let code = self.push(best);
         let mut i = 0;
-        while i < text.len() {
-            if i != text.len() - 1 && Pair((text[i], text[i + 1])) == best {
-                new_text.push(besti);
+        while i < dat.len() {
+            if i != dat.len() - 1 && Pair((dat[i], dat[i + 1])) == best {
+                new_dat.push(code);
                 i += 1;
             } else {
-                new_text.push(text[i]);
+                new_dat.push(dat[i]);
             }
             i += 1;
         }
-        let tmp = text;
-        text = new_text;
-        new_text = tmp;
-        new_text.clear();
-        counter.clear();
-        println!("{:?}", text);
+
+        std::mem::swap(dat, new_dat);
     }
 
+    /// Convert chars to code
+    fn encode_first_step(&mut self, text: &str) -> Vec<u32> {
+        let mut dat: Vec<u32> = vec![];
+        for c in text.chars() {
+            let c = Prime(c);
+            dat.push(self.push(c));
+        }
+        dat
+    }
+}
+
+fn main() {
+    let text = "Hello, world!";
+    let mut vocab = Vocab::default();
+    let dat = vocab.encode(text);
+    println!("{:?}", dat);
     let mut s = String::new();
-    vocab.decode(&text, &mut s);
+    vocab.decode(&dat, &mut s);
     println!("{}", s);
 }
