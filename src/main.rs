@@ -129,7 +129,7 @@ impl Vocab {
             let s = std::str::from_utf8(&bytes[..r]).unwrap().to_string();
             inv.insert(s.clone(), table.len() as u32);
             table.push(s);
-            if r == bytes.len() - 1 {
+            if r >= bytes.len() - 1 {
                 break;
             }
             bytes = &bytes[r + 1..];
@@ -192,14 +192,18 @@ enum SubCmd {
 struct CmdEncode {
     #[clap(short, long)]
     ntimes: u32,
-    #[clap(short, long)]
+    #[clap(short, long, default_value = "out.bin")]
     out: String,
+    #[clap(short, long, default_value = "vocab.bpe")]
+    vocab_path: String,
     input: String,
 }
 
 #[derive(Clap)]
 struct CmdDecode {
-    #[clap(short, long)]
+    #[clap(short, long, default_value = "vocab.bpe")]
+    vocab_path: String,
+    #[clap(short, long, default_value = "output.txt")]
     out: String,
     input: String,
 }
@@ -219,17 +223,30 @@ fn main() -> io::Result<()> {
             let codes = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
 
             // output
-            let mut fout = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(true)
-                .open(opts.out)?;
-            fout.write_all(&vocab.as_bytes())?;
-            fout.write(&[0, 0])?;
-            fout.write(&codes_to_bytes(&codes))?;
+            File::create(opts.vocab_path)?.write_all(&vocab.as_bytes())?;
+            File::create(opts.out)?.write_all(&codes_to_bytes(&codes))?;
             Ok(())
         }
-        SubCmd::Decode(opts) => Ok(()),
+        SubCmd::Decode(opts) => {
+            // TODO avoid Vector allocation
+            let vocab = Vocab::from_bytes(
+                &File::open(&opts.vocab_path)?
+                    .bytes()
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<_>>(),
+            );
+            let codes = File::open(&opts.input)?
+                .bytes()
+                .map(|x| x.unwrap())
+                .collect::<Vec<_>>();
+            let codes = bytes_to_codes(&codes);
+            let mut s = String::new();
+            vocab.decode(&codes, &mut s);
+
+            // output
+            File::create(opts.out)?.write_all(s.as_bytes())?;
+            Ok(())
+        }
     }
 }
 
