@@ -1,3 +1,9 @@
+#[cfg(test)]
+extern crate quickcheck;
+#[cfg(test)]
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
 use clap::Clap;
 use std::{
     collections::HashMap,
@@ -132,6 +138,45 @@ impl Vocab {
     }
 }
 
+const B7: u32 = (1 << 7) - 1;
+const P8: u8 = 1 << 7;
+
+fn codes_to_bytes(codes: &[u32]) -> Vec<u8> {
+    let mut ret = vec![];
+    for &code in codes {
+        ret.push((code & B7) as u8);
+        let mut code = code >> 7;
+        while code > 0 {
+            ret.push((code & B7) as u8 | P8);
+            code >>= 7;
+        }
+    }
+    ret
+}
+
+fn bytes_to_codes(bytes: &[u8]) -> Vec<u32> {
+    let mut ret: Vec<u32> = vec![];
+    let mut first = true;
+    let mut cur = 0;
+    for &byte in bytes {
+        if byte & P8 == 0 {
+            if first {
+                first = false
+            } else {
+                ret.push(cur);
+            }
+            cur = byte as u32;
+        } else {
+            cur <<= 7;
+            cur |= (byte & !P8) as u32;
+        }
+    }
+    if !first {
+        ret.push(cur);
+    }
+    ret
+}
+
 #[derive(Clap)]
 struct Opts {
     #[clap(subcommand)]
@@ -141,11 +186,19 @@ struct Opts {
 #[derive(Clap)]
 enum SubCmd {
     Encode(CmdEncode),
+    Decode(CmdDecode),
 }
 #[derive(Clap)]
 struct CmdEncode {
     #[clap(short, long)]
     ntimes: u32,
+    #[clap(short, long)]
+    out: String,
+    input: String,
+}
+
+#[derive(Clap)]
+struct CmdDecode {
     #[clap(short, long)]
     out: String,
     input: String,
@@ -163,7 +216,7 @@ fn main() -> io::Result<()> {
 
             // encode
             let mut vocab = Vocab::default();
-            let dat = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
+            let codes = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
 
             // output
             let mut fout = OpenOptions::new()
@@ -173,9 +226,28 @@ fn main() -> io::Result<()> {
                 .open(opts.out)?;
             fout.write_all(&vocab.as_bytes())?;
             fout.write(&[0, 0])?;
-            // fout.write(&dat)?;
-
+            fout.write(&codes_to_bytes(&codes))?;
             Ok(())
         }
+        SubCmd::Decode(opts) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_bytes_and_codes_handmade() {
+        let cases = vec![(vec![0, 22], vec![0, 22]), (vec![0], vec![0])];
+        for (codes, expected) in cases {
+            let bytes = codes_to_bytes(&codes);
+            assert_eq!(bytes, expected);
+            assert_eq!(bytes_to_codes(&bytes), codes);
+        }
+    }
+
+    #[quickcheck]
+    fn test_bytes_and_codes_quick(codes: Vec<u32>) {
+        assert_eq!(codes, bytes_to_codes(&codes_to_bytes(&codes)));
     }
 }
