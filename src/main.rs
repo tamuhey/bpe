@@ -1,7 +1,8 @@
 use clap::Clap;
 use std::{
     collections::HashMap,
-    io::{self, Read},
+    fs::{File, OpenOptions},
+    io::{self, prelude::*},
 };
 
 enum EncodeOpt {
@@ -133,21 +134,48 @@ impl Vocab {
 
 #[derive(Clap)]
 struct Opts {
-    #[clap(short, long)]
-    ntimes: u32,
+    #[clap(subcommand)]
+    subcmd: SubCmd,
 }
 
-fn main() {
+#[derive(Clap)]
+enum SubCmd {
+    Encode(CmdEncode),
+}
+#[derive(Clap)]
+struct CmdEncode {
+    #[clap(short, long)]
+    ntimes: u32,
+    #[clap(short, long)]
+    out: String,
+    input: String,
+}
+
+fn main() -> io::Result<()> {
     let opts: Opts = Opts::parse();
-    let mut text = String::new();
-    io::stdin().lock().read_to_string(&mut text).unwrap();
-    println!("{:?}", text); // DEBUG
-    let mut vocab = Vocab::default();
-    let dat = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
-    println!("{:?}", dat);
-    let b = vocab.as_bytes();
-    let vocab = Vocab::from_bytes(&b);
-    let mut s = String::new();
-    vocab.decode(&dat, &mut s);
-    println!("{}", s);
+
+    match opts.subcmd {
+        SubCmd::Encode(opts) => {
+            // read from file
+            let mut text = String::new();
+            let mut file = File::open(&opts.input)?;
+            file.read_to_string(&mut text).unwrap();
+
+            // encode
+            let mut vocab = Vocab::default();
+            let dat = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
+
+            // output
+            let mut fout = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(opts.out)?;
+            fout.write_all(&vocab.as_bytes())?;
+            fout.write(&[0, 0])?;
+            // fout.write(&dat)?;
+
+            Ok(())
+        }
+    }
 }
