@@ -105,6 +105,30 @@ impl Vocab {
     fn decode_unit(&self, x: u32, s: &mut String) {
         s.push_str(self.table[x as usize].as_str())
     }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut ret = vec![];
+        for s in &self.table {
+            ret.extend(s.as_bytes());
+            ret.push(0);
+        }
+        ret
+    }
+    pub fn from_bytes(mut bytes: &[u8]) -> Self {
+        let mut table = vec![];
+        let mut inv = HashMap::new();
+        while bytes.len() > 0 {
+            let r = bytes.iter().position(|c| *c == 0).unwrap();
+            let s = std::str::from_utf8(&bytes[..r]).unwrap().to_string();
+            inv.insert(s.clone(), table.len() as u32);
+            table.push(s);
+            if r == bytes.len() - 1 {
+                break;
+            }
+            bytes = &bytes[r + 1..];
+        }
+        Self { table, inv }
+    }
 }
 
 #[derive(Clap)]
@@ -121,6 +145,8 @@ fn main() {
     let mut vocab = Vocab::default();
     let dat = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
     println!("{:?}", dat);
+    let b = vocab.as_bytes();
+    let vocab = Vocab::from_bytes(&b);
     let mut s = String::new();
     vocab.decode(&dat, &mut s);
     println!("{}", s);
