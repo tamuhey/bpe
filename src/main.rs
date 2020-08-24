@@ -103,8 +103,8 @@ impl Vocab {
         dat
     }
 
-    pub fn decode(&self, data: &[u32], s: &mut String) {
-        for &x in data {
+    pub fn decode(&self, data: impl Iterator<Item = u32>, s: &mut String) {
+        for x in data {
             self.decode_unit(x, s)
         }
     }
@@ -121,18 +121,17 @@ impl Vocab {
         }
         ret
     }
-    pub fn from_bytes(mut bytes: &[u8]) -> Self {
+    pub fn from_bytes(mut bytes: impl Iterator<Item = u8>) -> Self {
         let mut table = vec![];
         let mut inv = HashMap::new();
-        while bytes.len() > 0 {
-            let r = bytes.iter().position(|c| *c == 0).unwrap_or(bytes.len());
-            let s = std::str::from_utf8(&bytes[..r]).unwrap().to_string();
-            inv.insert(s.clone(), table.len() as u32);
-            table.push(s);
-            if r >= bytes.len() - 1 {
+        loop {
+            let dat = bytes.by_ref().take_while(|c| *c != 0).collect::<Vec<_>>();
+            if dat.len() == 0 {
                 break;
             }
-            bytes = &bytes[r + 1..];
+            let s = std::str::from_utf8(&dat).unwrap().to_string();
+            inv.insert(s.clone(), table.len() as u32);
+            table.push(s);
         }
         Self { table, inv }
     }
@@ -228,19 +227,15 @@ fn main() -> io::Result<()> {
         }
         SubCmd::Decode(opts) => {
             // TODO avoid Vector allocation
-            let vocab = Vocab::from_bytes(
-                &File::open(&opts.vocab_path)?
-                    .bytes()
-                    .map(|x| x.unwrap())
-                    .collect::<Vec<_>>(),
-            );
+            let vocab =
+                Vocab::from_bytes(File::open(&opts.vocab_path)?.bytes().map(|x| x.unwrap()));
             let codes = File::open(&opts.input)?
                 .bytes()
                 .map(|x| x.unwrap())
                 .collect::<Vec<_>>();
             let codes = bytes_to_codes(&codes);
             let mut s = String::new();
-            vocab.decode(&codes, &mut s);
+            vocab.decode(codes.into_iter(), &mut s);
 
             // output
             File::create(opts.out)?.write_all(s.as_bytes())?;
