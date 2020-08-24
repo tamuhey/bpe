@@ -190,7 +190,7 @@ enum SubCmd {
 #[derive(Clap)]
 struct CmdEncode {
     #[clap(short, long)]
-    ntimes: u32,
+    nstep: u32,
     #[clap(short, long, default_value = "out.bin")]
     out: String,
     #[clap(short, long, default_value = "vocab.bpe")]
@@ -218,7 +218,7 @@ fn main() -> io::Result<()> {
 
             // encode
             let mut vocab = Vocab::default();
-            let codes = vocab.encode(&text, EncodeOpt::NTimes(opts.ntimes));
+            let codes = vocab.encode(&text, EncodeOpt::NTimes(opts.nstep));
 
             // output
             File::create(opts.vocab_path)?.write_all(&vocab.as_bytes())?;
