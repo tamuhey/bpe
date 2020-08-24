@@ -1,3 +1,6 @@
 /target
 /test.txt
 /out.dat
+/out.bin
+/output.txt
+/vocab.bpe

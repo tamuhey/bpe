@@ -215,8 +215,7 @@ fn main() -> io::Result<()> {
         SubCmd::Encode(opts) => {
             // read from file
             let mut text = String::new();
-            let mut file = File::open(&opts.input)?;
-            file.read_to_string(&mut text).unwrap();
+            File::open(&opts.input)?.read_to_string(&mut text)?;
 
             // encode
             let mut vocab = Vocab::default();
