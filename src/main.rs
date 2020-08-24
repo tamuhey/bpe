@@ -226,7 +226,6 @@ fn main() -> io::Result<()> {
             Ok(())
         }
         SubCmd::Decode(opts) => {
-            // TODO avoid Vector allocation
             let vocab =
                 Vocab::from_bytes(File::open(&opts.vocab_path)?.bytes().map(|x| x.unwrap()));
             let codes = File::open(&opts.input)?
