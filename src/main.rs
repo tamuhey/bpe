@@ -118,7 +118,7 @@ impl Vocab {
         let mut table = vec![];
         let mut inv = HashMap::new();
         while bytes.len() > 0 {
-            let r = bytes.iter().position(|c| *c == 0).unwrap();
+            let r = bytes.iter().position(|c| *c == 0).unwrap_or(bytes.len());
             let s = std::str::from_utf8(&bytes[..r]).unwrap().to_string();
             inv.insert(s.clone(), table.len() as u32);
             table.push(s);
