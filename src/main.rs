@@ -5,6 +5,7 @@ extern crate quickcheck;
 extern crate quickcheck_macros;
 mod train;
 
+use anyhow::Result;
 use clap::Clap;
 use std::{
     collections::HashMap,
@@ -43,11 +44,11 @@ struct DecodeOpts {
     input: String,
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
-        SubCmd::Train(opts) => train::train(opts),
+        SubCmd::Train(opts) => train::train(opts)?,
         SubCmd::Encode(opts) => {}
         SubCmd::Decode(opts) => {}
     }
