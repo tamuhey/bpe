@@ -1,11 +1,14 @@
 extern crate protoc_rust;
 
-use protoc_rust::Customize;
-
+const TARGET_PROTOBUF: &[&str] = &["src/sentencepiece.proto"];
 fn main() {
+    for path in TARGET_PROTOBUF {
+        println!("cargo:rerun-if-changed={}", path);
+    }
+    println!("Build protobuf");
     protoc_rust::Codegen::new()
         .out_dir("src/protos")
-        .inputs(&["src/sentencepiece.proto"])
+        .inputs(TARGET_PROTOBUF)
         .run()
         .expect("protoc");
 }
