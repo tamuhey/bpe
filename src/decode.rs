@@ -1,5 +1,5 @@
 use crate::protos::sentencepiece::*;
-use crate::protos::sentencepiece::*;
+use crate::protos::sentencepiece_model::ModelProto;
 use anyhow::Result;
 use bytes::Buf;
 use clap::Clap;
@@ -17,10 +17,7 @@ use quick_protobuf::{BytesReader, MessageRead};
 use std::io::Cursor;
 pub fn decode(opts: DecodeOpts) -> Result<()> {
     let mut model = File::open(&opts.model_path)?;
-    let model = model.bytes().collect::<Result<Vec<_>, _>>()?;
-    let mut reader = BytesReader::from_bytes(&model);
-    let model = SentencePieceText::from_reader(&mut reader, &model);
-    // let model: SentencePieceText = protobuf::parse_from_reader(&mut model)?;
+    let model: ModelProto = protobuf::parse_from_reader(&mut model)?;
     log::info!("Loaded model");
     eprintln!("{:?}", model); // DEBUG
     Ok(())

@@ -13,9 +13,6 @@ anyhow = "1.0"
 log = "0.4.0"
 env_logger = "0.7.1"
 protobuf = { version="2", features = ["with-bytes"]}
-bytes = "*"
-prost = "*"
-quick-protobuf = {git = "https://github.com/tafia/quick-protobuf"}
 
 [dev-dependencies]
 quickcheck = "0.9"
@@ -23,4 +20,3 @@ quickcheck_macros = "0.9"
 
 [build-dependencies]
 protoc-rust = "2"
-prost-build = "*"
