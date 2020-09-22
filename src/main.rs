@@ -4,6 +4,8 @@ extern crate quickcheck;
 #[cfg(test)]
 #[macro_use(quickcheck)]
 extern crate quickcheck_macros;
+mod decode;
+mod protos;
 mod train;
 use env_logger::{self, Builder, Target};
 use log::{self, LevelFilter};
@@ -28,7 +30,7 @@ struct Opts {
 enum SubCmd {
     Train(train::TrainOpts),
     Encode(EncodeOpts),
-    Decode(DecodeOpts),
+    Decode(decode::DecodeOpts),
 }
 
 #[derive(Clap)]
@@ -37,15 +39,6 @@ struct EncodeOpts {
     out: String,
     #[clap(short, long, default_value = "vocab.bpe")]
     vocab_path: String,
-    input: String,
-}
-
-#[derive(Clap)]
-struct DecodeOpts {
-    #[clap(short, long, default_value = "vocab.bpe")]
-    vocab_path: String,
-    #[clap(short, long, default_value = "output.txt")]
-    out: String,
     input: String,
 }
 
@@ -60,11 +53,12 @@ fn main() -> Result<()> {
     let mut builder = Builder::from_default_env();
     builder.filter_level(level);
     builder.init();
+    eprintln!("out dir {:?}", std::env!("OUT_DIR")); // DEBUG
 
     match opts.subcmd {
         SubCmd::Train(opts) => train::train(opts)?,
         SubCmd::Encode(opts) => {}
-        SubCmd::Decode(opts) => {}
+        SubCmd::Decode(opts) => decode::decode(opts)?,
     }
     Ok(())
 }
