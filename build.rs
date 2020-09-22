@@ -1,6 +1,9 @@
 extern crate protoc_rust;
 
-const TARGET_PROTOBUF: &[&str] = &["src/sentencepiece.proto", "src/sentencepiece_model.proto"];
+const TARGET_PROTOBUF: &[&str] = &[
+    "src/protos/sentencepiece_model.proto",
+    "src/protos/sentencepiece.proto",
+];
 fn main() {
     for path in TARGET_PROTOBUF {
         println!("cargo:rerun-if-changed={}", path);

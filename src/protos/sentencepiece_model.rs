@@ -17,7 +17,7 @@
 #![allow(trivial_casts)]
 #![allow(unused_imports)]
 #![allow(unused_results)]
-//! Generated file from `src/sentencepiece_model.proto`
+//! Generated file from `src/protos/sentencepiece_model.proto`
 
 /// Generated files are compatible only with the same version
 /// of protobuf runtime.
