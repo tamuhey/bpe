@@ -1,8 +1,13 @@
+use crate::norm;
+use crate::protos::sentencepiece_model::{
+    ModelProto, ModelProto_SentencePiece, ModelProto_SentencePiece_Type,
+};
 use anyhow::Result;
 use clap::Clap;
 use log;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::fs::File;
+use std::io::BufWriter;
 use std::io::{self, prelude::*, BufReader};
 
 #[derive(Clap)]
@@ -13,6 +18,8 @@ pub struct TrainOpts {
     vocab_path: String,
     #[clap(short, long, default_value = "100")]
     nstep: usize,
+    #[clap(short, long)]
+    model_prefix: String,
     input: String,
 }
 
@@ -61,13 +68,14 @@ impl<'a> Documents<'a> {
         Some(())
     }
 
-    fn all_words(&self) -> HashSet<&'a [char]> {
-        let mut ret = HashSet::new();
+    fn all_words(&self) -> HashMap<&'a [char], usize> {
+        let mut ret = HashMap::new();
         for (sentence, link) in self.sentences.iter().zip(self.links.iter()) {
             for (l, &(_, r)) in link.iter().enumerate() {
-                if r <= sentence.len() {
-                    ret.insert(&sentence[l..r]);
+                if r <= sentence.len() && (r - l) > 1 {
+                    *ret.entry(&sentence[l..r]).or_default() += 1;
                 }
+                ret.entry(&sentence[l..(l + 1)]).or_default();
             }
         }
         ret
@@ -75,8 +83,10 @@ impl<'a> Documents<'a> {
 }
 
 pub fn train(opts: TrainOpts) -> Result<()> {
-    log::info!("start train");
+    log::info!("Start train");
     let sentences = get_sentences(&opts.input)?;
+    log::info!("Load texts from {}", &opts.input);
+
     let links: Vec<Vec<_>> = sentences
         .iter()
         .map(|s| (0..s.len()).map(|i| (i.wrapping_sub(1), i + 1)).collect())
@@ -87,6 +97,7 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         links,
     };
 
+    log::info!("Start training loop");
     // buffer for pairs to be modified
     let mut pairs_rm = HashMap::<&[char], Vec<(usize, usize)>>::new();
     let mut pairs_add = HashMap::<&[char], Vec<(usize, usize)>>::new();
@@ -167,8 +178,56 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         }
         nodes_rm.clear();
     }
-    eprintln!("{:?}", doc.all_words()); // DEBUG
+    log::info!("End training loop");
+    let pieces = create_pieces(&doc);
+
+    let path = opts.model_prefix.clone() + ".vocab";
+    save_pieces_tsv(&pieces, &path)?;
+    log::info!("Saved vocab to {}", path);
+
+    let mut model = ModelProto::new();
+    model.set_pieces(pieces.into());
+    let path = opts.model_prefix + ".model";
+    model.save(&path)?;
+    log::info!("Saved model to {}", path);
+
     Ok(())
+}
+
+fn save_pieces_tsv<P: AsRef<std::path::Path>>(
+    pieces: &[ModelProto_SentencePiece],
+    path: P,
+) -> Result<()> {
+    let mut f = BufWriter::new(File::create(path)?);
+    for p in pieces {
+        writeln!(f, "{}\t{}", p.get_piece(), p.get_score())?;
+    }
+    Ok(())
+}
+
+fn create_pieces(doc: &Documents) -> Vec<ModelProto_SentencePiece> {
+    let mut ret = vec![];
+    for (s, t) in &[
+        ("<unk>", ModelProto_SentencePiece_Type::UNKNOWN),
+        ("<s>", ModelProto_SentencePiece_Type::CONTROL),
+        ("</s>", ModelProto_SentencePiece_Type::CONTROL),
+    ] {
+        let mut p = ModelProto_SentencePiece::new();
+        p.set_piece(s.to_string());
+        p.set_score(0.0);
+        p.set_field_type(*t);
+        ret.push(p);
+    }
+    let mut words: Vec<_> = doc.all_words().into_iter().collect();
+    // Note: sort by reverse order
+    words.sort_by(|a, b| b.1.cmp(&a.1));
+    for (i, (s, _)) in words.iter().enumerate() {
+        let mut p = ModelProto_SentencePiece::new();
+        p.set_piece(s.into_iter().collect());
+        p.set_score(-(i as f32));
+        ret.push(p);
+    }
+    ret
 }
 
 fn get_candidates<'a>(
@@ -200,7 +259,7 @@ fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
     let f = File::open(path)?;
     let sentences: Vec<Vec<char>> = BufReader::new(f)
         .lines()
-        .map(|line| line.map(|line| line.chars().map(|c| c).collect::<Vec<_>>()))
+        .map(|line| line.map(|s| norm::to_chars(&s)))
         .collect::<Result<_, _>>()?;
     Ok(sentences)
 }

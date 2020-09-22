@@ -5,6 +5,8 @@ extern crate quickcheck;
 #[macro_use(quickcheck)]
 extern crate quickcheck_macros;
 mod decode;
+mod model;
+mod norm;
 mod protos;
 mod train;
 use env_logger::{self, Builder, Target};
