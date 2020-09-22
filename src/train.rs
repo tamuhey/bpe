@@ -23,40 +23,35 @@ impl Documents {
     fn chars(&self, sid: usize, i: usize) -> &[char] {
         &self.sentences[sid][i..self.links[sid][i].1]
     }
+    fn nth_from(&self, pos: (usize, usize), offset: isize) -> Option<(usize, usize)> {
+        let (sid, mut i) = pos;
+        let links = &self.links[sid];
+        for _ in offset..0 {
+            i = links.get(i)?.0;
+        }
+        for _ in 0..offset {
+            i = links.get(i)?.1;
+        }
+        Some((sid, i))
+    }
     fn pair_chars(
         &self,
-        sid: usize,
-        i: usize,
+        pos: (usize, usize),
         left: isize,
         right: isize,
     ) -> Option<(&[char], (usize, usize))> {
-        let mut l = i;
-        let links = &self.links[sid];
-        for _ in left..0 {
-            if l >= links.len() {
-                return None;
-            }
-            l = links[l].0;
-        }
-        let mut r = links[i].1;
-        for _ in 0..(right - 1) {
-            if r >= links.len() {
-                return None;
-            }
-            r = links[r].1;
-        }
-        Some((&self.sentences[sid][l..r], (sid, l)))
+        let l = self.nth_from(pos, left)?;
+        let r = self.nth_from(pos, right)?;
+        Some((&self.sentences[l.0][l.1..r.1], l))
     }
-    fn remove_node(&mut self, sid: usize, i: usize) {
+
+    fn remove_node(&mut self, pos: (usize, usize)) {
+        let (sid, l) = self.nth_from(pos, -1).unwrap();
+        let (_sid, r) = self.nth_from(pos, 1).unwrap();
+        debug_assert_eq!(sid, _sid);
         let links = &mut self.links[sid];
-        let (l, r) = links[i];
-        if let Some(v) = links.get_mut(l) {
-            v.1 = r;
-        }
-        if let Some(v) = links.get_mut(r) {
-            v.0 = l;
-        }
-        links[i] = (!0, !0);
+        links[l].1 = r;
+        links[r].0 = l;
     }
 }
 // 1. すべてのペアを抽出
@@ -64,31 +59,66 @@ impl Documents {
 // 3. オーバーラップしている候補ペアについて処理
 pub fn train(opts: TrainOpts) -> Result<()> {
     let sentences = get_sentences(&opts.input)?;
-    let mut links: Vec<Vec<_>> = sentences
+    let links: Vec<Vec<_>> = sentences
         .iter()
         .map(|s| (0..s.len()).map(|i| (i.wrapping_sub(1), i + 1)).collect())
         .collect();
+    let (mut cand_pos, mut cand_pairs) = get_candidates(&sentences);
     let mut doc = Documents { sentences, links };
-    let (mut cand_pos, mut cand_pairs) = get_candidates(&doc.sentences);
 
     // buffer for pairs to be modified
-    let mut staging_rm = vec![];
-    let mut staging_add = vec![];
+    let mut pairs_rm = HashMap::<&[char], Vec<(usize, usize)>>::new();
+    let mut pairs_add = HashMap::<&[char], Vec<(usize, usize)>>::new();
+    let mut nodes_rm = HashSet::<(usize, usize)>::new();
     for _ in 0..10 {
         let (_, best_pair) = cand_pos.pop_last().unwrap();
         let positions = cand_pairs.remove(best_pair).unwrap();
-        for (sid, i) in positions {
+        for pos in positions {
+            let (sid, i) = pos;
+            if nodes_rm.contains(&pos) {
+                continue;
+            }
             // left
-            if let Some((pair, pos)) = doc.pair_chars(sid, i, -1, 1) {
-                staging_rm.push((pair, pos));
-                staging_add.push((doc.pair_chars(sid, pos.1, 0, 2).unwrap(), pos))
+            if let Some((pair, pos)) = doc.pair_chars((sid, i), -1, 1) {
+                pairs_rm.entry(pair).or_default().push(pos);
+                let (pair, pos) = doc.pair_chars(pos, 0, 3).unwrap();
+                pairs_add.entry(pair).or_default().push(pos);
             };
             // right
-            if let Some((pair, pos)) = doc.pair_chars(sid, i, 1, 2) {
-                staging_rm.push((pair, pos));
-                staging_add.push((doc.pair_chars(sid, pos.1, -1, 1).unwrap(), pos))
+            if let Some((pair, pos)) = doc.pair_chars((sid, i), 1, 3) {
+                pairs_rm.entry(pair).or_default().push(pos);
+                let (pair, pos) = doc.pair_chars(pos, -1, 2).unwrap();
+                pairs_add.entry(pair).or_default().push(pos);
             };
-            doc.remove_node(sid, i);
+            nodes_rm.insert(pos);
+        }
+
+        for (pair, positions) in &pairs_rm {
+            let v = cand_pairs.get_mut(pair).unwrap();
+            cand_pos.remove(&(v.len(), pair));
+            for pos in positions {
+                v.remove(pos);
+            }
+        }
+        for (pair, positions) in &pairs_add {
+            let v = cand_pairs.get_mut(pair).unwrap();
+            cand_pos.remove(&(v.len(), pair));
+            for &pos in positions {
+                debug_assert!(v.insert(pos));
+            }
+        }
+
+        // re-compute freq for each pairs
+        for (pair, _) in &pairs_rm {
+            cand_pos.insert((cand_pairs[pair].len(), pair));
+        }
+        for (pair, _) in &pairs_add {
+            cand_pos.insert((cand_pairs[pair].len(), pair));
+        }
+
+        // modify links
+        for pos in &nodes_rm {
+            doc.remove_node(*pos);
         }
     }
     Ok(())
