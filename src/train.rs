@@ -114,10 +114,11 @@ pub fn train(opts: TrainOpts) -> Result<()> {
 
     log::info!("Start training loop");
     // buffer for pairs to be modified
-    let mut pairs_rm = HashMap::<&[char], Vec<(usize, usize)>>::new();
-    let mut pairs_add = HashMap::<&[char], Vec<(usize, usize)>>::new();
-    let mut nodes_rm = HashSet::<(usize, usize)>::new();
+    let mut processed = BTreeSet::new();
+    let mut pairs_modified = vec![];
     'main: for i in 0..opts.nstep {
+        processed.clear();
+        pairs_modified.clear();
         if i % 20 == 0 {
             log::info!("Start {:<3} step", i);
         }
@@ -134,56 +135,66 @@ pub fn train(opts: TrainOpts) -> Result<()> {
             }
         }
         log::trace!("best pair {:?}", &best_pair);
+        // check all pairs
         let positions = cand_pairs.remove(best_pair).unwrap();
         for pos in positions {
-            let (sid, i) = pos;
-            if nodes_rm.contains(&pos) {
-                continue;
+            if let Some(prev) = doc.nth_from(pos, -1) {
+                if processed.contains(&prev) {
+                    // `pos` is no longer a valid pair
+                    continue;
+                }
             }
-            // left
-            if let Some((pair, pos)) = doc.pair_words((sid, i), -1, 1) {
-                pairs_rm.entry(pair).or_default().push(pos);
-                let (pair, pos) = doc.pair_words(pos, 0, 3).unwrap();
-                pairs_add.entry(pair).or_default().push(pos);
-            };
-            // right
-            if let Some((pair, pos)) = doc.pair_words((sid, i), 1, 3) {
-                pairs_rm.entry(pair).or_default().push(pos);
-                let (pair, pos) = doc.pair_words(pos, -1, 2).unwrap();
-                pairs_add.entry(pair).or_default().push(pos);
-            };
+            processed.insert(pos);
+        }
 
-            nodes_rm.insert(doc.nth_from(pos, 1).unwrap());
+        // remove pairs
+        let mut remove = |pair, pos| {
+            if let Some(v) = cand_pairs.get_mut(pair) {
+                cand_pos.remove(&(v.len(), pair));
+                v.remove(&pos);
+                pairs_modified.push(pair);
+                if v.len() == 0 {
+                    cand_pairs.remove(pair);
+                }
+            }
+        };
+        for &pos in &processed {
+            // left
+            if let Some((pair, pos)) = doc.pair_words(pos, -1, 1) {
+                remove(pair, pos);
+            }
+            // right
+            if let Some((pair, pos)) = doc.pair_words(pos, 1, 3) {
+                remove(pair, pos);
+            }
         }
 
         // Modify links
-        for pos in &nodes_rm {
-            doc.remove_node(*pos);
+        for pos in &processed {
+            doc.remove_node(doc.nth_from(*pos, 1).unwrap());
         }
 
-        // Modify the candidates
-        // remove
-        for (pair, positions) in &pairs_rm {
-            if let Some(v) = cand_pairs.get_mut(pair) {
-                cand_pos.remove(&(v.len(), pair));
-                for pos in positions {
-                    v.remove(pos);
-                }
-            }
-        }
-        // add
-        for (pair, positions) in &pairs_add {
+        // Add new pairs
+        let mut add = |pair, pos| {
             let v = cand_pairs.entry(pair).or_default();
             cand_pos.remove(&(v.len(), pair));
-            for pos in positions {
-                if doc.is_valid_pos(pos) {
-                    v.insert(*pos);
-                }
+            v.insert(pos);
+            pairs_modified.push(pair);
+        };
+
+        for &pos in &processed {
+            // left
+            if let Some((pair, pos)) = doc.pair_words(pos, -1, 1) {
+                add(pair, pos);
+            }
+            // right
+            if let Some((pair, pos)) = doc.pair_words(pos, 0, 2) {
+                add(pair, pos);
             }
         }
 
         // re-compute freq for each pairs
-        for (pair, _) in pairs_rm.iter().chain(pairs_add.iter()) {
+        for pair in &pairs_modified {
             if let Some(l) = cand_pairs.get(pair).map(|s| s.len()) {
                 if l > 0 {
                     cand_pos.insert((l, pair));
@@ -192,9 +203,6 @@ pub fn train(opts: TrainOpts) -> Result<()> {
                 }
             }
         }
-        pairs_rm.clear();
-        pairs_add.clear();
-        nodes_rm.clear();
     }
     log::info!("End training loop");
     let pieces = create_pieces(&doc);
