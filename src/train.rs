@@ -19,6 +19,25 @@ pub struct TrainOpts {
     input: String,
 }
 
+pub fn train(opts: TrainOpts) -> Result<()> {
+    log::info!("Start train");
+    let sentences = get_sentences(&opts.input)?;
+    log::info!("Loaded texts from {}", &opts.input);
+
+    let pieces = train_core(sentences, &opts);
+    let path = opts.model_prefix.clone() + ".vocab";
+    save_pieces_tsv(&pieces, &path)?;
+    log::info!("Saved vocab to {}", path);
+
+    let mut model = ModelProto::new();
+    model.set_pieces(pieces.into());
+    let path = opts.model_prefix + ".model";
+    model.save(&path)?;
+    log::info!("Saved model to {}", path);
+
+    Ok(())
+}
+
 #[derive(Debug)]
 struct Documents<'a> {
     sentences: &'a Vec<Vec<char>>,
@@ -93,11 +112,7 @@ fn is_valid_piece(piece: &[char]) -> bool {
     true
 }
 
-pub fn train(opts: TrainOpts) -> Result<()> {
-    log::info!("Start train");
-    let sentences = get_sentences(&opts.input)?;
-    log::info!("Load texts from {}", &opts.input);
-
+fn train_core(sentences: Vec<Vec<char>>, opts: &TrainOpts) -> Vec<ModelProto_SentencePiece> {
     let links: Vec<Vec<_>> = sentences
         .iter()
         .map(|s| (0..s.len()).map(|i| (i.wrapping_sub(1), i + 1)).collect())
@@ -201,19 +216,7 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         }
     }
     log::info!("End training loop");
-    let pieces = create_pieces(&doc);
-
-    let path = opts.model_prefix.clone() + ".vocab";
-    save_pieces_tsv(&pieces, &path)?;
-    log::info!("Saved vocab to {}", path);
-
-    let mut model = ModelProto::new();
-    model.set_pieces(pieces.into());
-    let path = opts.model_prefix + ".model";
-    model.save(&path)?;
-    log::info!("Saved model to {}", path);
-
-    Ok(())
+    create_pieces(&doc)
 }
 
 fn save_pieces_tsv<P: AsRef<std::path::Path>>(
@@ -289,6 +292,7 @@ fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norm;
     fn run_train(fname: &str) {
         let opts = TrainOpts {
             input: fname.into(),
