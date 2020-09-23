@@ -80,6 +80,11 @@ impl<'a> Documents<'a> {
         }
         ret
     }
+
+    #[inline]
+    fn is_valid_pos(&self, pos: &(usize, usize)) -> bool {
+        self.links[pos.0][pos.1].1 <= self.links[pos.0].len()
+    }
 }
 
 fn is_valid_piece(piece: &[char]) -> bool {
@@ -131,6 +136,7 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         }
         log::trace!("best pair {:?}", &best_pair);
         let positions = cand_pairs.remove(best_pair).unwrap();
+        log::trace!("links: {:?}", doc.links);
         for pos in positions {
             let (sid, i) = pos;
             if nodes_rm.contains(&pos) {
@@ -148,12 +154,20 @@ pub fn train(opts: TrainOpts) -> Result<()> {
                 let (pair, pos) = doc.pair_words(pos, -1, 2).unwrap();
                 pairs_add.entry(pair).or_default().push(pos);
             };
+
+            log::trace!("pos: {:?}", pos);
             nodes_rm.insert(doc.nth_from(pos, 1).unwrap());
         }
 
         log::trace!("pairs_rm {:?}", &pairs_rm);
         log::trace!("pairs_add {:?}", &pairs_add);
         log::trace!("nodes_rm {:?}", &nodes_rm);
+
+        // Modify links
+        for pos in &nodes_rm {
+            log::trace!("{:?}", pos);
+            doc.remove_node(*pos);
+        }
 
         // Modify the candidates
         // remove
@@ -170,7 +184,9 @@ pub fn train(opts: TrainOpts) -> Result<()> {
             let v = cand_pairs.entry(pair).or_default();
             cand_pos.remove(&(v.len(), pair));
             for pos in positions {
-                v.insert(*pos);
+                if doc.is_valid_pos(pos) {
+                    v.insert(*pos);
+                }
             }
         }
 
@@ -186,11 +202,6 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         }
         pairs_rm.clear();
         pairs_add.clear();
-        // modify links
-        for pos in &nodes_rm {
-            log::trace!("{:?}", pos);
-            doc.remove_node(*pos);
-        }
         nodes_rm.clear();
     }
     log::info!("End training loop");
