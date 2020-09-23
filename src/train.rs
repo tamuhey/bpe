@@ -21,10 +21,8 @@ pub struct TrainOpts {
 
 pub fn train(opts: TrainOpts) -> Result<()> {
     log::info!("Start train");
-    let sentences = get_sentences(&opts.input)?;
-    log::info!("Loaded texts from {}", &opts.input);
 
-    let pieces = train_core(sentences, &opts);
+    let pieces = train_core(&opts)?;
     let path = opts.model_prefix.clone() + ".vocab";
     save_pieces_tsv(&pieces, &path)?;
     log::info!("Saved vocab to {}", path);
@@ -112,7 +110,9 @@ fn is_valid_piece(piece: &[char]) -> bool {
     true
 }
 
-fn train_core(sentences: Vec<Vec<char>>, opts: &TrainOpts) -> Vec<ModelProto_SentencePiece> {
+fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
+    let sentences = get_sentences(&opts.input)?;
+    log::info!("Loaded texts from {}", &opts.input);
     let links: Vec<Vec<_>> = sentences
         .iter()
         .map(|s| (0..s.len()).map(|i| (i.wrapping_sub(1), i + 1)).collect())
@@ -216,21 +216,15 @@ fn train_core(sentences: Vec<Vec<char>>, opts: &TrainOpts) -> Vec<ModelProto_Sen
         }
     }
     log::info!("End training loop");
-    create_pieces(&doc)
+    Ok(create_pieces(
+        doc.all_words()
+            .into_iter()
+            .map(|(s, c)| (s.into_iter().collect(), c))
+            .collect(),
+    ))
 }
 
-fn save_pieces_tsv<P: AsRef<std::path::Path>>(
-    pieces: &[ModelProto_SentencePiece],
-    path: P,
-) -> Result<()> {
-    let mut f = BufWriter::new(File::create(path)?);
-    for p in pieces {
-        writeln!(f, "{}\t{}", p.get_piece(), p.get_score())?;
-    }
-    Ok(())
-}
-
-fn create_pieces(doc: &Documents) -> Vec<ModelProto_SentencePiece> {
+fn init_pieces() -> Vec<ModelProto_SentencePiece> {
     let mut ret = vec![];
     for (s, t) in &[
         ("<unk>", ModelProto_SentencePiece_Type::UNKNOWN),
@@ -243,16 +237,31 @@ fn create_pieces(doc: &Documents) -> Vec<ModelProto_SentencePiece> {
         p.set_field_type(*t);
         ret.push(p);
     }
-    let mut words: Vec<_> = doc.all_words().into_iter().collect();
+    ret
+}
+
+fn create_pieces(mut words: Vec<(String, usize)>) -> Vec<ModelProto_SentencePiece> {
+    let mut ret = init_pieces();
     // Note: sort by reverse order
     words.sort_by(|a, b| b.1.cmp(&a.1));
-    for (i, (s, _)) in words.iter().enumerate() {
+    for (i, (s, _)) in words.into_iter().enumerate() {
         let mut p = ModelProto_SentencePiece::new();
-        p.set_piece(s.into_iter().collect());
+        p.set_piece(s);
         p.set_score(-(i as f32));
         ret.push(p);
     }
     ret
+}
+
+fn save_pieces_tsv<P: AsRef<std::path::Path>>(
+    pieces: &[ModelProto_SentencePiece],
+    path: P,
+) -> Result<()> {
+    let mut f = BufWriter::new(File::create(path)?);
+    for p in pieces {
+        writeln!(f, "{}\t{}", p.get_piece(), p.get_score())?;
+    }
+    Ok(())
 }
 
 fn get_candidates<'a>(
@@ -302,7 +311,7 @@ mod tests {
         train(opts).unwrap();
     }
     #[test]
-    fn samples() {
+    fn run_samples() {
         for fname in &[
             "tests/sample0.txt",
             "tests/sample1.txt",
@@ -310,5 +319,104 @@ mod tests {
         ] {
             run_train(fname);
         }
+    }
+
+    #[test]
+    fn check_with_slow_algorithm() {
+        for fname in &[
+            "tests/sample0.txt",
+            "tests/sample1.txt",
+            "tests/sample2.txt",
+        ] {
+            let mut opts = TrainOpts {
+                input: fname.to_string(),
+                nstep: 100,
+                model_prefix: "/tmp/main".into(),
+            };
+            let a: BTreeSet<_> = train_core(&opts)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.get_piece().to_string())
+                .collect();
+            let b: BTreeSet<_> = slow_bpe(&opts)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.get_piece().to_string())
+                .collect();
+            assert_eq!(
+                a,
+                b,
+                "failed with {}
+            a-b: {:?}
+            b-a: {:?}
+            ",
+                fname,
+                a.difference(&b).collect::<Vec<_>>(),
+                b.difference(&a).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    fn slow_bpe(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
+        let sentences = get_sentences(&opts.input)?;
+        let mut encoded: Vec<Vec<String>> = sentences
+            .iter()
+            .map(|line| line.into_iter().map(|c| c.to_string()).collect())
+            .collect();
+        fn get_freq<'a>(encoded: &'a [Vec<String>]) -> HashMap<(&'a String, &'a String), usize> {
+            let mut freq = HashMap::<_, usize>::new();
+            for line in encoded {
+                for (a, b) in line.iter().zip(line.iter().skip(1)) {
+                    *freq.entry((a, b)).or_default() += 1;
+                }
+            }
+            freq
+        };
+        'main: for _ in 0..opts.nstep {
+            let mut freq: Vec<_> = get_freq(&encoded).into_iter().collect();
+            freq.sort_by_key(|x| x.1);
+            let pair;
+            'outer: loop {
+                while let Some(((a, b), _)) = freq.pop() {
+                    if !b.ends_with(norm::SPACE_REP) {
+                        pair = (a.clone(), b.clone());
+                        break 'outer;
+                    }
+                }
+                break 'main;
+            }
+            let (a, b) = pair;
+            let p = format!("{}{}", a, b);
+            encoded = encoded
+                .into_iter()
+                .map(|line| {
+                    let mut i = 0;
+                    let mut next_line = vec![];
+                    while i < line.len() {
+                        if i < line.len() - 1 && (&line[i], &line[i + 1]) == (&a, &b) {
+                            next_line.push(p.clone());
+                            i += 2;
+                        } else {
+                            next_line.push(line[i].clone());
+                            i += 1;
+                        }
+                    }
+                    next_line
+                })
+                .collect();
+        }
+
+        let mut freq = HashMap::new();
+        for line in encoded {
+            for word in line {
+                *freq.entry(word).or_default() += 1;
+            }
+        }
+        for line in sentences {
+            for c in line {
+                *freq.entry(c.to_string()).or_default() = 0;
+            }
+        }
+        Ok(create_pieces(freq.into_iter().collect()))
     }
 }
