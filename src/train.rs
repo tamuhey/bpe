@@ -121,7 +121,6 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         if i % 20 == 0 {
             log::info!("Start {:<3} step", i);
         }
-        log::trace!("cand pairs {:?}", &cand_pairs);
         let best_pair;
         loop {
             let pair = if let Some(last) = cand_pos.pop_last() {
@@ -136,7 +135,6 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         }
         log::trace!("best pair {:?}", &best_pair);
         let positions = cand_pairs.remove(best_pair).unwrap();
-        log::trace!("links: {:?}", doc.links);
         for pos in positions {
             let (sid, i) = pos;
             if nodes_rm.contains(&pos) {
@@ -155,17 +153,11 @@ pub fn train(opts: TrainOpts) -> Result<()> {
                 pairs_add.entry(pair).or_default().push(pos);
             };
 
-            log::trace!("pos: {:?}", pos);
             nodes_rm.insert(doc.nth_from(pos, 1).unwrap());
         }
 
-        log::trace!("pairs_rm {:?}", &pairs_rm);
-        log::trace!("pairs_add {:?}", &pairs_add);
-        log::trace!("nodes_rm {:?}", &nodes_rm);
-
         // Modify links
         for pos in &nodes_rm {
-            log::trace!("{:?}", pos);
             doc.remove_node(*pos);
         }
 
