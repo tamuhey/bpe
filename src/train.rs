@@ -102,9 +102,11 @@ pub fn train(opts: TrainOpts) -> Result<()> {
     let mut pairs_rm = HashMap::<&[char], Vec<(usize, usize)>>::new();
     let mut pairs_add = HashMap::<&[char], Vec<(usize, usize)>>::new();
     let mut nodes_rm = HashSet::<(usize, usize)>::new();
-    for _ in 0..opts.nstep {
+    for i in 0..opts.nstep {
+        if i % 20 == 0 {
+            log::info!("Start {:<3} step", i);
+        }
         log::trace!("cand pairs {:?}", &cand_pairs);
-        log::trace!("links {:?}", doc.links);
         let (_, best_pair) = if let Some(last) = cand_pos.pop_last() {
             last
         } else {
@@ -114,7 +116,6 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         let positions = cand_pairs.remove(best_pair).unwrap();
         for pos in positions {
             let (sid, i) = pos;
-            log::trace!("pos {:?}", pos);
             if nodes_rm.contains(&pos) {
                 continue;
             }
@@ -130,43 +131,40 @@ pub fn train(opts: TrainOpts) -> Result<()> {
                 let (pair, pos) = doc.pair_words(pos, -1, 2).unwrap();
                 pairs_add.entry(pair).or_default().push(pos);
             };
-            nodes_rm.insert(pos);
+            nodes_rm.insert(doc.nth_from(pos, 1).unwrap());
         }
 
         log::trace!("pairs_rm {:?}", &pairs_rm);
         log::trace!("pairs_add {:?}", &pairs_add);
         log::trace!("nodes_rm {:?}", &nodes_rm);
 
+        // Modify the candidates
+        // remove
         for (pair, positions) in &pairs_rm {
-            let v = cand_pairs.get_mut(pair).unwrap();
-            cand_pos.remove(&(v.len(), pair));
-            for pos in positions {
-                v.remove(pos);
+            if let Some(v) = cand_pairs.get_mut(pair) {
+                cand_pos.remove(&(v.len(), pair));
+                for pos in positions {
+                    v.remove(pos);
+                }
             }
         }
+        // add
         for (pair, positions) in &pairs_add {
             let v = cand_pairs.entry(pair).or_default();
             cand_pos.remove(&(v.len(), pair));
-            for &pos in positions {
-                debug_assert!(v.insert(pos));
+            for pos in positions {
+                v.insert(*pos);
             }
         }
 
         // re-compute freq for each pairs
-        for (pair, _) in &pairs_rm {
-            let l = cand_pairs[pair].len();
-            if l > 0 {
-                cand_pos.insert((l, pair));
-            } else {
-                cand_pairs.remove(pair);
-            }
-        }
-        for (pair, _) in &pairs_add {
-            let l = cand_pairs[pair].len();
-            if l > 0 {
-                cand_pos.insert((l, pair));
-            } else {
-                cand_pairs.remove(pair);
+        for (pair, _) in pairs_rm.iter().chain(pairs_add.iter()) {
+            if let Some(l) = cand_pairs.get(pair).map(|s| s.len()) {
+                if l > 0 {
+                    cand_pos.insert((l, pair));
+                } else {
+                    cand_pairs.remove(pair);
+                }
             }
         }
         pairs_rm.clear();
@@ -174,7 +172,7 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         // modify links
         for pos in &nodes_rm {
             log::trace!("{:?}", pos);
-            doc.remove_node(doc.nth_from(*pos, 1).unwrap());
+            doc.remove_node(*pos);
         }
         nodes_rm.clear();
     }
@@ -234,16 +232,13 @@ fn get_candidates<'a>(
     sentences: &'a [Vec<char>],
 ) -> (
     BTreeSet<(usize, &[char])>,
-    HashMap<&[char], HashSet<(usize, usize)>>,
+    HashMap<&[char], BTreeSet<(usize, usize)>>,
 ) {
-    let mut candidates = HashMap::new();
+    let mut candidates = HashMap::<_, BTreeSet<_>>::new();
     for (i, line) in sentences.iter().enumerate() {
         for j in 0..(line.len() - 1) {
             let key = &line[j..j + 2];
-            candidates
-                .entry(key)
-                .or_insert(HashSet::new())
-                .insert((i, j));
+            candidates.entry(key).or_default().insert((i, j));
         }
     }
     let mut positions = BTreeSet::new();
