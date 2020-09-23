@@ -82,6 +82,16 @@ impl<'a> Documents<'a> {
     }
 }
 
+fn is_valid_piece(piece: &[char]) -> bool {
+    if piece.len() == 0 {
+        return false;
+    }
+    if piece[piece.len() - 1] == norm::SPACE_REP {
+        return false;
+    }
+    true
+}
+
 pub fn train(opts: TrainOpts) -> Result<()> {
     log::info!("Start train");
     let sentences = get_sentences(&opts.input)?;
@@ -102,16 +112,23 @@ pub fn train(opts: TrainOpts) -> Result<()> {
     let mut pairs_rm = HashMap::<&[char], Vec<(usize, usize)>>::new();
     let mut pairs_add = HashMap::<&[char], Vec<(usize, usize)>>::new();
     let mut nodes_rm = HashSet::<(usize, usize)>::new();
-    for i in 0..opts.nstep {
+    'main: for i in 0..opts.nstep {
         if i % 20 == 0 {
             log::info!("Start {:<3} step", i);
         }
         log::trace!("cand pairs {:?}", &cand_pairs);
-        let (_, best_pair) = if let Some(last) = cand_pos.pop_last() {
-            last
-        } else {
-            break;
-        };
+        let best_pair;
+        loop {
+            let pair = if let Some(last) = cand_pos.pop_last() {
+                last.1
+            } else {
+                break 'main;
+            };
+            if is_valid_piece(pair) {
+                best_pair = pair;
+                break;
+            }
+        }
         log::trace!("best pair {:?}", &best_pair);
         let positions = cand_pairs.remove(best_pair).unwrap();
         for pos in positions {
