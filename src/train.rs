@@ -12,10 +12,6 @@ use std::io::{self, prelude::*, BufReader};
 
 #[derive(Clap)]
 pub struct TrainOpts {
-    #[clap(short, long, default_value = "out.bin")]
-    out: String,
-    #[clap(short, long, default_value = "vocab.bpe")]
-    vocab_path: String,
     #[clap(short, long, default_value = "100")]
     nstep: usize,
     #[clap(short, long)]
@@ -280,9 +276,35 @@ fn get_candidates<'a>(
 
 fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
     let f = File::open(path)?;
-    let sentences: Vec<Vec<char>> = BufReader::new(f)
-        .lines()
-        .map(|line| line.map(|s| norm::to_chars(&s)))
-        .collect::<Result<_, _>>()?;
-    Ok(sentences)
+    let mut ret = vec![];
+    for line in BufReader::new(f).lines() {
+        let line = norm::to_chars(&line?);
+        if line.len() > 0 {
+            ret.push(line);
+        }
+    }
+    Ok(ret)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn run_train(fname: &str) {
+        let opts = TrainOpts {
+            input: fname.into(),
+            nstep: 100,
+            model_prefix: "/tmp/foo".into(),
+        };
+        train(opts).unwrap();
+    }
+    #[test]
+    fn samples() {
+        for fname in &[
+            "tests/sample0.txt",
+            "tests/sample1.txt",
+            "tests/sample2.txt",
+        ] {
+            run_train(fname);
+        }
+    }
 }
