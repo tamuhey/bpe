@@ -422,6 +422,7 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
         }
         freq
     };
+    let mut max_size = 0;
     let freq = loop {
         let mut freq: Vec<_> = get_freq(&encoded).into_iter().collect();
         freq.sort_by_key(|x| x.1);
@@ -431,7 +432,11 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
                     break 'outer (a.clone(), b.clone());
                 }
             }
-            return Err(anyhow!(""));
+            return Err(anyhow!(
+                "max_size {:?}, but vocab_size {:?}",
+                max_size,
+                opts.vocab_size
+            ));
         };
         let (a, b) = pair;
         let p = format!("{}{}", a, b);
@@ -460,11 +465,15 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
                 }
             }
         }
-        if freq.len() + pieces.len() >= opts.vocab_size {
+        let size = freq.len() + pieces.len();
+        max_size = std::cmp::max(size, max_size);
+        if size == opts.vocab_size {
             break freq;
         }
     };
+    assert_eq!(pieces.len() + freq.len(), opts.vocab_size);
     pieces.add_pieces(freq.into_iter().collect());
+    assert_eq!(opts.vocab_size, pieces.len());
     Ok(pieces)
 }
 
@@ -496,7 +505,6 @@ mod tests {
             ("tests/sample0.txt", 7),
             ("tests/sample1.txt", 80),
             ("tests/sample2.txt", 6),
-            ("tests/sample4.txt", 9),
         ] {
             let opts = TrainOpts {
                 input: fname.to_string(),
@@ -506,27 +514,17 @@ mod tests {
             };
             let a: BTreeSet<_> = train_core(&opts)
                 .unwrap()
-                .to_vec()
+                .pieces
                 .into_iter()
                 .map(|x| x.get_piece().to_string())
                 .collect();
             let b: BTreeSet<_> = slow_bpe(&opts)
                 .unwrap()
-                .to_vec()
+                .pieces
                 .into_iter()
                 .map(|x| x.get_piece().to_string())
                 .collect();
-            assert_eq!(
-                a,
-                b,
-                "failed with {}
-            a-b: {:?}
-            b-a: {:?}
-            ",
-                fname,
-                a.difference(&b).collect::<Vec<_>>(),
-                b.difference(&a).collect::<Vec<_>>(),
-            );
+            assert_eq!(a, b, "failed with {}", fname,);
             println!("OK {}", fname);
         }
     }
