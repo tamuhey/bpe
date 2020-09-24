@@ -10,19 +10,28 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::io::{self, prelude::*, BufReader};
 
-#[derive(Clap)]
+#[derive(Clap, Debug)]
 pub struct TrainOpts {
     #[clap(short, long, default_value = "100")]
     nstep: usize,
     #[clap(short, long)]
     model_prefix: String,
     input: String,
+    #[cfg(debug_assertions)]
+    #[clap(long)]
+    slow: bool,
 }
 
 pub fn train(opts: TrainOpts) -> Result<()> {
     log::info!("Start train");
+    log::debug!("Config: {:?}", opts);
 
-    let pieces = train_core(&opts)?;
+    let pieces = if cfg!(debug_assertions) && opts.slow {
+        log::warn!("Running with slow bpe");
+        slow_bpe(&opts)?
+    } else {
+        train_core(&opts)?
+    };
     let path = opts.model_prefix.clone() + ".vocab";
     save_pieces_tsv(&pieces, &path)?;
     log::info!("Saved vocab to {}", path);
@@ -298,6 +307,70 @@ fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
     Ok(ret)
 }
 
+#[cfg(debug_assertions)]
+fn slow_bpe(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
+    let sentences = get_sentences(&opts.input)?;
+    let mut encoded: Vec<Vec<String>> = sentences
+        .iter()
+        .map(|line| line.into_iter().map(|c| c.to_string()).collect())
+        .collect();
+    fn get_freq<'a>(encoded: &'a [Vec<String>]) -> HashMap<(&'a String, &'a String), usize> {
+        let mut freq = HashMap::<_, usize>::new();
+        for line in encoded {
+            for (a, b) in line.iter().zip(line.iter().skip(1)) {
+                *freq.entry((a, b)).or_default() += 1;
+            }
+        }
+        freq
+    };
+    'main: for _ in 0..opts.nstep {
+        let mut freq: Vec<_> = get_freq(&encoded).into_iter().collect();
+        freq.sort_by_key(|x| x.1);
+        let pair;
+        'outer: loop {
+            while let Some(((a, b), _)) = freq.pop() {
+                if !b.ends_with(norm::SPACE_REP) {
+                    pair = (a.clone(), b.clone());
+                    break 'outer;
+                }
+            }
+            break 'main;
+        }
+        let (a, b) = pair;
+        let p = format!("{}{}", a, b);
+        encoded = encoded
+            .into_iter()
+            .map(|line| {
+                let mut i = 0;
+                let mut next_line = vec![];
+                while i < line.len() {
+                    if i < line.len() - 1 && (&line[i], &line[i + 1]) == (&a, &b) {
+                        next_line.push(p.clone());
+                        i += 2;
+                    } else {
+                        next_line.push(line[i].clone());
+                        i += 1;
+                    }
+                }
+                next_line
+            })
+            .collect();
+    }
+
+    let mut freq = HashMap::new();
+    for line in encoded {
+        for word in line {
+            *freq.entry(word).or_default() += 1;
+        }
+    }
+    for line in sentences {
+        for c in line {
+            *freq.entry(c.to_string()).or_default() = 0;
+        }
+    }
+    Ok(create_pieces(freq.into_iter().collect()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +380,7 @@ mod tests {
             input: fname.into(),
             nstep: 100,
             model_prefix: "/tmp/foo".into(),
+            slow: false,
         };
         train(opts).unwrap();
     }
@@ -324,14 +398,16 @@ mod tests {
     #[test]
     fn check_with_slow_algorithm() {
         for fname in &[
+            "tests/sample4.txt",
             "tests/sample0.txt",
             "tests/sample1.txt",
             "tests/sample2.txt",
         ] {
-            let mut opts = TrainOpts {
+            let opts = TrainOpts {
                 input: fname.to_string(),
                 nstep: 100,
                 model_prefix: "/tmp/main".into(),
+                slow: false,
             };
             let a: BTreeSet<_> = train_core(&opts)
                 .unwrap()
@@ -354,69 +430,7 @@ mod tests {
                 a.difference(&b).collect::<Vec<_>>(),
                 b.difference(&a).collect::<Vec<_>>(),
             );
+            println!("OK {}", fname);
         }
-    }
-
-    fn slow_bpe(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
-        let sentences = get_sentences(&opts.input)?;
-        let mut encoded: Vec<Vec<String>> = sentences
-            .iter()
-            .map(|line| line.into_iter().map(|c| c.to_string()).collect())
-            .collect();
-        fn get_freq<'a>(encoded: &'a [Vec<String>]) -> HashMap<(&'a String, &'a String), usize> {
-            let mut freq = HashMap::<_, usize>::new();
-            for line in encoded {
-                for (a, b) in line.iter().zip(line.iter().skip(1)) {
-                    *freq.entry((a, b)).or_default() += 1;
-                }
-            }
-            freq
-        };
-        'main: for _ in 0..opts.nstep {
-            let mut freq: Vec<_> = get_freq(&encoded).into_iter().collect();
-            freq.sort_by_key(|x| x.1);
-            let pair;
-            'outer: loop {
-                while let Some(((a, b), _)) = freq.pop() {
-                    if !b.ends_with(norm::SPACE_REP) {
-                        pair = (a.clone(), b.clone());
-                        break 'outer;
-                    }
-                }
-                break 'main;
-            }
-            let (a, b) = pair;
-            let p = format!("{}{}", a, b);
-            encoded = encoded
-                .into_iter()
-                .map(|line| {
-                    let mut i = 0;
-                    let mut next_line = vec![];
-                    while i < line.len() {
-                        if i < line.len() - 1 && (&line[i], &line[i + 1]) == (&a, &b) {
-                            next_line.push(p.clone());
-                            i += 2;
-                        } else {
-                            next_line.push(line[i].clone());
-                            i += 1;
-                        }
-                    }
-                    next_line
-                })
-                .collect();
-        }
-
-        let mut freq = HashMap::new();
-        for line in encoded {
-            for word in line {
-                *freq.entry(word).or_default() += 1;
-            }
-        }
-        for line in sentences {
-            for c in line {
-                *freq.entry(c.to_string()).or_default() = 0;
-            }
-        }
-        Ok(create_pieces(freq.into_iter().collect()))
     }
 }
