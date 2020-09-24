@@ -9,10 +9,11 @@ mod model;
 mod norm;
 mod protos;
 mod train;
-use env_logger::{self, Builder, Target};
+use env_logger;
 use log::{self, LevelFilter};
 
 use anyhow::Result;
+use chrono::Local;
 use clap::Clap;
 use std::{
     collections::HashMap,
@@ -52,10 +53,20 @@ fn main() -> Result<()> {
         2 => LevelFilter::Debug,
         _ => LevelFilter::Trace,
     };
-    let mut builder = Builder::from_default_env();
-    builder.filter_level(level);
-    builder.init();
-    eprintln!("out dir {:?}", std::env!("OUT_DIR")); // DEBUG
+    env_logger::builder()
+        .filter(None, level)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{}:{} {} [{}] - {}",
+                record.file().unwrap(),
+                record.line().unwrap(),
+                Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
 
     match opts.subcmd {
         SubCmd::Train(opts) => train::train(opts)?,
