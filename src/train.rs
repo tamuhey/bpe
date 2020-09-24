@@ -33,11 +33,11 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         train_core(&opts)?
     };
     let path = opts.model_prefix.clone() + ".vocab";
-    save_pieces_tsv(&pieces, &path)?;
+    pieces.save_pieces_tsv(&path);
     log::info!("Saved vocab to {}", path);
 
     let mut model = ModelProto::new();
-    model.set_pieces(pieces.into());
+    model.set_pieces(pieces.to_vec().into());
     let path = opts.model_prefix + ".model";
     model.save(&path)?;
     log::info!("Saved model to {}", path);
@@ -119,9 +119,13 @@ fn is_valid_piece(piece: &[char]) -> bool {
     true
 }
 
-fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
+fn train_core(opts: &TrainOpts) -> Result<Pieces> {
     let sentences = get_sentences(&opts.input)?;
     log::info!("Loaded texts from {}", &opts.input);
+
+    let mut pieces = Pieces::new(&sentences);
+    log::info!("Created {} pieces", pieces.len());
+
     let links: Vec<Vec<_>> = sentences
         .iter()
         .map(|s| (0..s.len()).map(|i| (i.wrapping_sub(1), i + 1)).collect())
@@ -136,6 +140,7 @@ fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
     // buffer for pairs to be modified
     let mut processed = BTreeSet::new();
     let mut pairs_modified = vec![];
+
     'main: for i in 0..opts.nstep {
         processed.clear();
         pairs_modified.clear();
@@ -195,7 +200,7 @@ fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
         }
 
         // Add new pairs
-        let mut add = |pair, pos| {
+        let mut ret = |pair, pos| {
             let v = cand_pairs.entry(pair).or_default();
             cand_pos.remove(&(v.len(), pair));
             v.insert(pos);
@@ -205,11 +210,11 @@ fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
         for &pos in &processed {
             // left
             if let Some((pair, pos)) = doc.pair_words(pos, -1, 1) {
-                add(pair, pos);
+                ret(pair, pos);
             }
             // right
             if let Some((pair, pos)) = doc.pair_words(pos, 0, 2) {
-                add(pair, pos);
+                ret(pair, pos);
             }
         }
 
@@ -225,52 +230,102 @@ fn train_core(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
         }
     }
     log::info!("End training loop");
-    Ok(create_pieces(
+    pieces.add_pieces(
         doc.all_words()
             .into_iter()
             .map(|(s, c)| (s.into_iter().collect(), c))
             .collect(),
-    ))
+    );
+    Ok(pieces)
 }
 
-fn init_pieces() -> Vec<ModelProto_SentencePiece> {
-    let mut ret = vec![];
-    for (s, t) in &[
-        ("<unk>", ModelProto_SentencePiece_Type::UNKNOWN),
-        ("<s>", ModelProto_SentencePiece_Type::CONTROL),
-        ("</s>", ModelProto_SentencePiece_Type::CONTROL),
-    ] {
-        let mut p = ModelProto_SentencePiece::new();
-        p.set_piece(s.to_string());
-        p.set_score(0.0);
-        p.set_field_type(*t);
-        ret.push(p);
-    }
-    ret
+struct Pieces {
+    predefined: Vec<ModelProto_SentencePiece>,
+    chars: Vec<ModelProto_SentencePiece>,
+    pieces: Vec<ModelProto_SentencePiece>,
 }
 
-fn create_pieces(mut words: Vec<(String, usize)>) -> Vec<ModelProto_SentencePiece> {
-    let mut ret = init_pieces();
-    // Note: sort by reverse order
-    words.sort_by(|a, b| b.1.cmp(&a.1));
-    for (i, (s, _)) in words.into_iter().enumerate() {
-        let mut p = ModelProto_SentencePiece::new();
-        p.set_piece(s);
-        p.set_score(-(i as f32));
-        ret.push(p);
+impl Pieces {
+    fn new(sentences: &[Vec<char>]) -> Self {
+        Self {
+            predefined: Self::get_predefined_pieces(),
+            chars: Self::init_pieces(sentences),
+            pieces: vec![],
+        }
     }
-    ret
-}
+    fn len(&self) -> usize {
+        self.predefined.len() + self.chars.len() + self.pieces.len()
+    }
 
-fn save_pieces_tsv<P: AsRef<std::path::Path>>(
-    pieces: &[ModelProto_SentencePiece],
-    path: P,
-) -> Result<()> {
-    let mut f = BufWriter::new(File::create(path)?);
-    for p in pieces {
-        writeln!(f, "{}\t{}", p.get_piece(), p.get_score())?;
+    fn get_predefined_pieces() -> Vec<ModelProto_SentencePiece> {
+        let mut ret = vec![];
+        for (s, t) in &[
+            ("<unk>", ModelProto_SentencePiece_Type::UNKNOWN),
+            ("<s>", ModelProto_SentencePiece_Type::CONTROL),
+            ("</s>", ModelProto_SentencePiece_Type::CONTROL),
+        ] {
+            let mut p = ModelProto_SentencePiece::new();
+            p.set_piece(s.to_string());
+            p.set_score(0.0);
+            p.set_field_type(*t);
+            ret.push(p);
+        }
+        ret
     }
-    Ok(())
+
+    fn init_pieces(sentences: &[Vec<char>]) -> Vec<ModelProto_SentencePiece> {
+        let mut ret = HashSet::new();
+        for line in sentences {
+            for c in line {
+                ret.insert(c);
+            }
+        }
+        ret.into_iter()
+            .map(|k| {
+                let mut p = ModelProto_SentencePiece::new();
+                p.set_piece(k.to_string());
+                p.set_field_type(ModelProto_SentencePiece_Type::NORMAL);
+                p
+            })
+            .collect()
+    }
+
+    fn add_pieces(&mut self, mut words: Vec<(String, usize)>) {
+        // Note: sort by reverse order
+        words.sort_by(|a, b| b.1.cmp(&a.1));
+        for (i, (s, _)) in words.into_iter().enumerate() {
+            let mut p = ModelProto_SentencePiece::new();
+            p.set_piece(s);
+            p.set_score(-(i as f32));
+            self.pieces.push(p);
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &ModelProto_SentencePiece> {
+        self.predefined
+            .iter()
+            .chain(self.pieces.iter())
+            .chain(self.chars.iter())
+    }
+
+    fn to_vec(self) -> Vec<ModelProto_SentencePiece> {
+        let Self {
+            mut predefined,
+            mut pieces,
+            mut chars,
+        } = self;
+        predefined.append(&mut pieces);
+        predefined.append(&mut chars);
+        predefined
+    }
+
+    fn save_pieces_tsv<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        let mut f = BufWriter::new(File::create(path)?);
+        for p in self.iter() {
+            writeln!(f, "{}\t{}", p.get_piece(), p.get_score())?;
+        }
+        Ok(())
+    }
 }
 
 fn get_candidates<'a>(
@@ -308,8 +363,9 @@ fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
 }
 
 #[cfg(debug_assertions)]
-fn slow_bpe(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
+fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
     let sentences = get_sentences(&opts.input)?;
+    let mut pieces = Pieces::new(&sentences);
     let mut encoded: Vec<Vec<String>> = sentences
         .iter()
         .map(|line| line.into_iter().map(|c| c.to_string()).collect())
@@ -368,13 +424,13 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Vec<ModelProto_SentencePiece>> {
             *freq.entry(c.to_string()).or_default() = 0;
         }
     }
-    Ok(create_pieces(freq.into_iter().collect()))
+    pieces.add_pieces(freq.into_iter().collect());
+    Ok(pieces)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norm;
     fn run_train(fname: &str) {
         let opts = TrainOpts {
             input: fname.into(),
@@ -411,11 +467,13 @@ mod tests {
             };
             let a: BTreeSet<_> = train_core(&opts)
                 .unwrap()
+                .to_vec()
                 .into_iter()
                 .map(|x| x.get_piece().to_string())
                 .collect();
             let b: BTreeSet<_> = slow_bpe(&opts)
                 .unwrap()
+                .to_vec()
                 .into_iter()
                 .map(|x| x.get_piece().to_string())
                 .collect();
