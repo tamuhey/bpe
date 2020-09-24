@@ -2,7 +2,7 @@ use crate::norm;
 use crate::protos::sentencepiece_model::{
     ModelProto, ModelProto_SentencePiece, ModelProto_SentencePiece_Type,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Clap;
 use log;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
@@ -12,8 +12,8 @@ use std::io::{self, prelude::*, BufReader};
 
 #[derive(Clap, Debug)]
 pub struct TrainOpts {
-    #[clap(short, long, default_value = "100")]
-    nstep: usize,
+    #[clap(short, long, default_value = "8000")]
+    vocab_size: usize,
     #[clap(short, long)]
     model_prefix: String,
     input: String,
@@ -33,7 +33,7 @@ pub fn train(opts: TrainOpts) -> Result<()> {
         train_core(&opts)?
     };
     let path = opts.model_prefix.clone() + ".vocab";
-    pieces.save_pieces_tsv(&path);
+    pieces.save_pieces_tsv(&path)?;
     log::info!("Saved vocab to {}", path);
 
     let mut model = ModelProto::new();
@@ -125,6 +125,11 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
 
     let mut pieces = Pieces::new(&sentences);
     log::info!("Created {} pieces", pieces.len());
+    if opts.vocab_size < pieces.len() {
+        let msg = format!("vocab_size must be larger than {}", pieces.len());
+        log::error!("{}", &msg);
+        return Err(anyhow!(msg));
+    }
 
     let links: Vec<Vec<_>> = sentences
         .iter()
@@ -140,25 +145,39 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
     // buffer for pairs to be modified
     let mut processed = BTreeSet::new();
     let mut pairs_modified = vec![];
+    let mut fixed_pieces = HashMap::<&[char], usize>::new();
 
-    'main: for i in 0..opts.nstep {
+    let mut counter = 0;
+    let mut max_piece_count = 0;
+    let mut size = 0;
+    while {
+        counter += 1;
+        size = fixed_pieces.len() + pieces.len();
+        max_piece_count = std::cmp::max(max_piece_count, size);
+        size < opts.vocab_size
+    } {
         processed.clear();
         pairs_modified.clear();
-        if i % 20 == 0 {
-            log::info!("Start {:<3} step", i);
+        if cfg!(debug_assertions) || counter % 20 == 0 {
+            log::info!("Start {:<3} step. piece size: {}", counter, size);
         }
-        let best_pair;
-        loop {
+
+        // pop best pair
+        let best_pair = loop {
             let pair = if let Some(last) = cand_pos.pop_last() {
                 last.1
             } else {
-                break 'main;
+                let msg = format!(
+                    "vocab_size must be less than or equal to {}",
+                    max_piece_count
+                );
+                log::error!("{}", &msg);
+                return Err(anyhow!(msg));
             };
             if is_valid_piece(pair) {
-                best_pair = pair;
-                break;
+                break pair;
             }
-        }
+        };
         log::trace!("best pair {:?}", &best_pair);
         // check all pairs
         let positions = cand_pairs.remove(best_pair).unwrap();
@@ -172,7 +191,24 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
             processed.insert(pos);
         }
 
-        // remove pairs
+        // fix best_pair
+        *fixed_pieces.entry(best_pair).or_default() += processed.len();
+
+        // modify fixed word counts
+        for &pos in &processed {
+            for i in 0..=1 {
+                if let Some((p, _)) = doc.pair_words(pos, i, i + 1) {
+                    if let Some(v) = fixed_pieces.get_mut(p) {
+                        *v -= 1;
+                        if *v == 0 {
+                            fixed_pieces.remove(p);
+                        }
+                    }
+                }
+            }
+        }
+
+        // remove candidate pairs
         let mut remove = |pair, pos| {
             if let Some(v) = cand_pairs.get_mut(pair) {
                 cand_pos.remove(&(v.len(), pair));
@@ -199,7 +235,7 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
             doc.remove_node(doc.nth_from(*pos, 1).unwrap());
         }
 
-        // Add new pairs
+        // Add new candidate pairs
         let mut ret = |pair, pos| {
             let v = cand_pairs.entry(pair).or_default();
             cand_pos.remove(&(v.len(), pair));
@@ -229,13 +265,19 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
             }
         }
     }
+    log::debug!("Created {:?} pieces", fixed_pieces.len());
+    debug_assert_eq!(
+        doc.all_words().iter().filter(|x| x.0.len() > 1).count(),
+        fixed_pieces.len()
+    );
     log::info!("End training loop");
     pieces.add_pieces(
-        doc.all_words()
+        fixed_pieces
             .into_iter()
-            .map(|(s, c)| (s.into_iter().collect(), c))
+            .map(|(k, v)| (k.into_iter().collect(), v))
             .collect(),
     );
+    debug_assert_eq!(pieces.len(), opts.vocab_size);
     Ok(pieces)
 }
 
@@ -293,12 +335,13 @@ impl Pieces {
     fn add_pieces(&mut self, mut words: Vec<(String, usize)>) {
         // Note: sort by reverse order
         words.sort_by(|a, b| b.1.cmp(&a.1));
-        for (i, (s, _)) in words.into_iter().enumerate() {
-            let mut p = ModelProto_SentencePiece::new();
-            p.set_piece(s);
-            p.set_score(-(i as f32));
-            self.pieces.push(p);
-        }
+        self.pieces
+            .extend(words.into_iter().enumerate().map(|(i, (s, _))| {
+                let mut p = ModelProto_SentencePiece::new();
+                p.set_piece(s);
+                p.set_score(-(i as f32));
+                p
+            }));
     }
 
     fn iter(&self) -> impl Iterator<Item = &ModelProto_SentencePiece> {
@@ -379,19 +422,17 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
         }
         freq
     };
-    'main: for _ in 0..opts.nstep {
+    let freq = loop {
         let mut freq: Vec<_> = get_freq(&encoded).into_iter().collect();
         freq.sort_by_key(|x| x.1);
-        let pair;
-        'outer: loop {
+        let pair = 'outer: loop {
             while let Some(((a, b), _)) = freq.pop() {
                 if !b.ends_with(norm::SPACE_REP) {
-                    pair = (a.clone(), b.clone());
-                    break 'outer;
+                    break 'outer (a.clone(), b.clone());
                 }
             }
-            break 'main;
-        }
+            return Err(anyhow!(""));
+        };
         let (a, b) = pair;
         let p = format!("{}{}", a, b);
         encoded = encoded
@@ -411,19 +452,18 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
                 next_line
             })
             .collect();
-    }
-
-    let mut freq = HashMap::new();
-    for line in encoded {
-        for word in line {
-            *freq.entry(word).or_default() += 1;
+        let mut freq = HashMap::new();
+        for line in &encoded {
+            for word in line {
+                if word.chars().count() > 1 {
+                    *freq.entry(word.clone()).or_default() += 1;
+                }
+            }
         }
-    }
-    for line in sentences {
-        for c in line {
-            *freq.entry(c.to_string()).or_default() = 0;
+        if freq.len() + pieces.len() >= opts.vocab_size {
+            break freq;
         }
-    }
+    };
     pieces.add_pieces(freq.into_iter().collect());
     Ok(pieces)
 }
@@ -431,37 +471,36 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn run_train(fname: &str) {
-        let opts = TrainOpts {
-            input: fname.into(),
-            nstep: 100,
-            model_prefix: "/tmp/foo".into(),
-            slow: false,
-        };
-        train(opts).unwrap();
-    }
     #[test]
     fn run_samples() {
-        for fname in &[
-            "tests/sample0.txt",
-            "tests/sample1.txt",
-            "tests/sample2.txt",
+        for (fname, vocab_size) in &[
+            ("tests/sample0.txt", 8),
+            ("tests/sample1.txt", 100),
+            ("tests/sample2.txt", 6),
+            ("tests/sample4.txt", 9),
         ] {
-            run_train(fname);
+            let opts = TrainOpts {
+                input: fname.to_string(),
+                vocab_size: *vocab_size,
+                model_prefix: "/tmp/foo".into(),
+                slow: false,
+            };
+            train(opts).unwrap();
+            println!("ok {:?}", fname); // DEBUG
         }
     }
 
     #[test]
     fn check_with_slow_algorithm() {
-        for fname in &[
-            "tests/sample4.txt",
-            "tests/sample0.txt",
-            "tests/sample1.txt",
-            "tests/sample2.txt",
+        for (fname, vocab_size) in &[
+            ("tests/sample0.txt", 7),
+            ("tests/sample1.txt", 80),
+            ("tests/sample2.txt", 6),
+            ("tests/sample4.txt", 9),
         ] {
             let opts = TrainOpts {
                 input: fname.to_string(),
-                nstep: 100,
+                vocab_size: *vocab_size,
                 model_prefix: "/tmp/main".into(),
                 slow: false,
             };
