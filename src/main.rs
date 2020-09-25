@@ -15,11 +15,7 @@ use log::{self, LevelFilter};
 use anyhow::Result;
 use chrono::Local;
 use clap::Clap;
-use std::{
-    collections::HashMap,
-    fs::{File, OpenOptions},
-    io::{self, prelude::*, BufReader},
-};
+use std::io::prelude::*;
 
 #[derive(Clap)]
 struct Opts {
@@ -70,7 +66,7 @@ fn main() -> Result<()> {
 
     match opts.subcmd {
         SubCmd::Train(opts) => train::train(opts)?,
-        SubCmd::Encode(opts) => {}
+        SubCmd::Encode(_opts) => {}
         SubCmd::Decode(opts) => decode::decode(opts)?,
     }
     Ok(())

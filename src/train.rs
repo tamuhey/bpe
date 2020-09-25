@@ -5,10 +5,10 @@ use crate::protos::sentencepiece_model::{
 use anyhow::{anyhow, Result};
 use clap::Clap;
 use log;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
-use std::io::{self, prelude::*, BufReader};
+use std::io::{prelude::*, BufReader};
 
 #[derive(Clap, Debug)]
 pub struct TrainOpts {
@@ -101,11 +101,6 @@ impl<'a> Documents<'a> {
             }
         }
         ret
-    }
-
-    #[inline]
-    fn is_valid_pos(&self, pos: &(usize, usize)) -> bool {
-        self.links[pos.0][pos.1].1 <= self.links[pos.0].len()
     }
 }
 
