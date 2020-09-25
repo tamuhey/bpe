@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn check_with_slow_algorithm() {
         for (fname, vocab_size) in &[
-            ("tests/sample0.txt", 7),
+            ("tests/sample0.txt", 8),
             ("tests/sample1.txt", 80),
             ("tests/sample2.txt", 6),
         ] {
