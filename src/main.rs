@@ -9,6 +9,7 @@ mod model;
 mod norm;
 mod protos;
 mod train;
+mod util;
 use env_logger;
 use log::{self, LevelFilter};
 
