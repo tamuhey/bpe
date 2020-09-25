@@ -144,7 +144,7 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
 
     let mut counter = 0;
     let mut max_piece_count = 0;
-    let mut size = 0;
+    let mut size;
     while {
         counter += 1;
         size = fixed_pieces.len() + pieces.len();
