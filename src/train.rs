@@ -2,8 +2,8 @@ use crate::norm;
 use crate::protos::sentencepiece_model::{
     ModelProto, ModelProto_SentencePiece, ModelProto_SentencePiece_Type,
 };
+use crate::spec::TrainSpec;
 use anyhow::{anyhow, Result};
-use clap::Clap;
 use log;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
@@ -12,35 +12,23 @@ use std::io::{prelude::*, BufReader};
 
 use crate::return_err;
 
-#[derive(Clap, Debug)]
-pub struct TrainOpts {
-    #[clap(short, long, default_value = "8000")]
-    vocab_size: usize,
-    #[clap(short, long)]
-    model_prefix: String,
-    input: String,
-    #[cfg(debug_assertions)]
-    #[clap(long)]
-    slow: bool,
-}
-
-pub fn train(opts: TrainOpts) -> Result<()> {
+pub fn train(spec: TrainSpec) -> Result<()> {
     log::info!("Start train");
-    log::debug!("Config: {:?}", opts);
+    log::debug!("Config: {:?}", spec);
 
-    let pieces = if cfg!(debug_assertions) && opts.slow {
+    let pieces = if cfg!(debug_assertions) && spec.slow {
         log::warn!("Running with slow bpe");
-        slow_bpe(&opts)?
+        slow_bpe(&spec)?
     } else {
-        train_core(&opts)?
+        train_core(&spec)?
     };
-    let path = opts.model_prefix.clone() + ".vocab";
+    let path = spec.model_prefix.clone() + ".vocab";
     pieces.save_pieces_tsv(&path)?;
     log::info!("Saved vocab to {}", path);
 
     let mut model = ModelProto::new();
     model.set_pieces(pieces.to_vec().into());
-    let path = opts.model_prefix + ".model";
+    let path = spec.model_prefix + ".model";
     model.save(&path)?;
     log::info!("Saved model to {}", path);
 
@@ -103,13 +91,13 @@ fn is_valid_piece(piece: &[char]) -> bool {
     true
 }
 
-fn train_core(opts: &TrainOpts) -> Result<Pieces> {
-    let sentences = get_sentences(&opts.input)?;
-    log::info!("Loaded texts from {}", &opts.input);
+fn train_core(spec: &TrainSpec) -> Result<Pieces> {
+    let sentences = get_sentences(&spec.input, spec)?;
+    log::info!("Loaded texts from {}", &spec.input);
 
     let mut pieces = Pieces::new(&sentences);
     log::info!("Created {} pieces", pieces.len());
-    if opts.vocab_size < pieces.len() {
+    if spec.vocab_size < pieces.len() {
         let msg = format!("vocab_size must be larger than {}", pieces.len());
         log::error!("{}", &msg);
         return Err(anyhow!(msg));
@@ -133,7 +121,7 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
     let mut counter = 0;
     while {
         counter += 1;
-        pieces.len() < opts.vocab_size
+        pieces.len() < spec.vocab_size
     } {
         processed.clear();
         pairs_modified.clear();
@@ -226,7 +214,7 @@ fn train_core(opts: &TrainOpts) -> Result<Pieces> {
     }
 
     log::info!("End training loop");
-    debug_assert_eq!(pieces.len(), opts.vocab_size);
+    debug_assert_eq!(pieces.len(), spec.vocab_size);
     Ok(pieces)
 }
 
@@ -341,11 +329,11 @@ fn get_candidates<'a>(
     (positions, pairs)
 }
 
-fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
+fn get_sentences(path: &str, spec: &TrainSpec) -> Result<Vec<Vec<char>>> {
     let f = File::open(path)?;
     let mut ret = vec![];
     for line in BufReader::new(f).lines() {
-        let line = norm::to_chars(&line?);
+        let line = norm::to_chars(&line?, &spec);
         if line.len() > 0 {
             ret.push(line);
         }
@@ -354,8 +342,8 @@ fn get_sentences(path: &str) -> Result<Vec<Vec<char>>> {
 }
 
 #[cfg(debug_assertions)]
-fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
-    let sentences = get_sentences(&opts.input)?;
+fn slow_bpe(spec: &TrainSpec) -> Result<Pieces> {
+    let sentences = get_sentences(&spec.input, spec)?;
     let mut pieces = Pieces::new(&sentences);
     let mut encoded: Vec<Vec<String>> = sentences
         .iter()
@@ -384,7 +372,7 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
             return_err!(
                 "max_size {:?}, but vocab_size {:?}",
                 pieces.len(),
-                opts.vocab_size
+                spec.vocab_size
             );
         };
         let (a, b) = pair;
@@ -408,11 +396,11 @@ fn slow_bpe(opts: &TrainOpts) -> Result<Pieces> {
                 next_line
             })
             .collect();
-        if pieces.len() == opts.vocab_size {
+        if pieces.len() == spec.vocab_size {
             break;
         }
     }
-    assert_eq!(opts.vocab_size, pieces.len());
+    assert_eq!(spec.vocab_size, pieces.len());
     Ok(pieces)
 }
 
@@ -427,13 +415,11 @@ mod tests {
             ("tests/sample2.txt", 6),
             ("tests/sample4.txt", 9),
         ] {
-            let opts = TrainOpts {
-                input: fname.to_string(),
-                vocab_size: *vocab_size,
-                model_prefix: "/tmp/foo".into(),
-                slow: false,
-            };
-            train(opts).unwrap();
+            let mut spec = TrainSpec::default();
+            spec.input = fname.to_string();
+            spec.vocab_size = *vocab_size;
+            spec.model_prefix = "/tmp/foo".into();
+            train(spec).unwrap();
             println!("ok {:?}", fname); // DEBUG
         }
     }
@@ -445,19 +431,18 @@ mod tests {
             ("tests/sample1.txt", 80),
             ("tests/sample2.txt", 6),
         ] {
-            let opts = TrainOpts {
-                input: fname.to_string(),
-                vocab_size: *vocab_size,
-                model_prefix: "/tmp/main".into(),
-                slow: false,
-            };
-            let a: BTreeSet<_> = train_core(&opts)
+            let mut spec = TrainSpec::default();
+            spec.input = fname.to_string();
+            spec.vocab_size = *vocab_size;
+            spec.model_prefix = "/tmp/main".into();
+            spec.slow = false;
+            let a: BTreeSet<_> = train_core(&spec)
                 .unwrap()
                 .pieces
                 .into_iter()
                 .map(|x| x.get_piece().to_string())
                 .collect();
-            let b: BTreeSet<_> = slow_bpe(&opts)
+            let b: BTreeSet<_> = slow_bpe(&spec)
                 .unwrap()
                 .pieces
                 .into_iter()

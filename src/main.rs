@@ -11,6 +11,7 @@ mod protos;
 mod train;
 mod util;
 use env_logger;
+mod spec;
 use log::{self, LevelFilter};
 
 use anyhow::Result;
@@ -28,7 +29,7 @@ struct Opts {
 
 #[derive(Clap)]
 enum SubCmd {
-    Train(train::TrainOpts),
+    Train(spec::TrainSpec),
     Encode(EncodeOpts),
     Decode(decode::DecodeOpts),
 }
@@ -43,8 +44,8 @@ struct EncodeOpts {
 }
 
 fn main() -> Result<()> {
-    let opts: Opts = Opts::parse();
-    let level = match opts.verbose {
+    let spec: Opts = Opts::parse();
+    let level = match spec.verbose {
         0 => LevelFilter::Warn,
         1 => LevelFilter::Info,
         2 => LevelFilter::Debug,
@@ -65,10 +66,10 @@ fn main() -> Result<()> {
         })
         .init();
 
-    match opts.subcmd {
-        SubCmd::Train(opts) => train::train(opts)?,
-        SubCmd::Encode(_opts) => {}
-        SubCmd::Decode(opts) => decode::decode(opts)?,
+    match spec.subcmd {
+        SubCmd::Train(spec) => train::train(spec)?,
+        SubCmd::Encode(spec) => {}
+        SubCmd::Decode(spec) => decode::decode(spec)?,
     }
     Ok(())
 }

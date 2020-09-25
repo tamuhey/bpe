@@ -10,8 +10,8 @@ pub struct DecodeOpts {
     model_path: String,
 }
 
-pub fn decode(opts: DecodeOpts) -> Result<()> {
-    let mut model = File::open(&opts.model_path)?;
+pub fn decode(spec: DecodeOpts) -> Result<()> {
+    let mut model = File::open(&spec.model_path)?;
     let model: ModelProto = protobuf::parse_from_reader(&mut model)?;
     log::info!("Loaded model");
     println!("{:?}", model); // DEBUG
